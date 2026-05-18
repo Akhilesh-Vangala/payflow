@@ -1,0 +1,332 @@
+# The out-of-scope half of the system: everything that never sees a card
+# number.
+#
+# All five workloads here are stateless and horizontally scalable, with ONE
+# exception that is called out where it applies.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments-api
+  namespace: payflow
+spec:
+  selector: { app: payments-api }
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-api
+  namespace: payflow
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: payments-api }
+  template:
+    metadata:
+      labels: { app: payments-api }
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: payments-api }
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: payments-api
+          image: ${ECR_REGISTRY}/payflow-payments-api:${IMAGE_TAG}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PAYFLOW_ENV
+              value: production
+            - name: PORT
+              value: "8080"
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: payflow-db, key: url } }
+            - name: REDIS_URL
+              valueFrom: { secretKeyRef: { name: payflow-redis, key: url } }
+            - name: CARD_HASH_SALT
+              # The SAME salt the vault uses. A card fingerprint is only useful
+              # for velocity rules and blocklists if both services derive the
+              # identical value for the same card — different salts would not
+              # error, they would silently stop every velocity rule from ever
+              # matching.
+              valueFrom: { secretKeyRef: { name: payflow-vault, key: card-hash-salt } }
+            - name: VAULT_URL
+              value: http://vault.payflow-cde.svc.cluster.local:8081
+            - name: VAULT_INTERNAL_SECRET
+              valueFrom: { secretKeyRef: { name: payflow-vault, key: internal-secret } }
+            - name: BANK_SIMULATOR_URL
+              value: http://bank-simulator:8090
+            - name: FRAUD_SERVICE_URL
+              value: http://fraud-service:8000
+            # Tight on purpose. A slow scorer is treated as a dead one and the
+            # charge falls back to the rule engine, because a model outage must
+            # not become a payments outage.
+            - name: FRAUD_TIMEOUT
+              value: "50ms"
+            - name: BANK_TIMEOUT
+              value: "5s"
+            # Used to build the payment-link URLs merchants copy out of the
+            # dashboard, so it must be the address a CUSTOMER can open — never
+            # an internal service name.
+            - name: PUBLIC_URL
+              value: https://api.${DOMAIN}
+            - name: DASHBOARD_ORIGINS
+              value: https://dashboard.${DOMAIN}
+          resources:
+            # Sized from measurement, not from a round number.
+            #
+            # Profiling the read path showed roughly 1.7ms of CPU per request,
+            # about half of it Windows network syscalls that do not exist on
+            # Linux. Budgeting ~1 vCPU per pod puts a pod at 1,500-3,000 req/s,
+            # so the HPA below reaches 10k somewhere around 5-8 replicas.
+            #
+            # No CPU limit, deliberately. A CPU limit throttles via CFS quota,
+            # which shows up as tail latency spikes on a service whose p99 is a
+            # thing merchants notice. The request is what the scheduler honours;
+            # the memory limit is what stops a leak taking down the node.
+            requests: { cpu: "1", memory: 192Mi }
+            limits: { memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 10
+          readinessProbe:
+            # /readyz checks the database; /healthz does not. The distinction
+            # matters: a pod with a broken database should stop receiving
+            # traffic but must NOT be restarted, or a brief RDS failover turns
+            # into a restart loop across every replica at once.
+            httpGet: { path: /readyz, port: 8080 }
+            periodSeconds: 5
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: payments-api
+  namespace: payflow
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app: payments-api }
+---
+# Autoscaling to ~10k req/s.
+#
+# The API is stateless — no session affinity, no local state, nothing shared
+# between replicas but Postgres and Redis — so throughput is close to linear in
+# replica count until the DATABASE becomes the limit. That is the real ceiling,
+# and it arrives before this HPA's maxReplicas does: see the PgBouncer note in
+# deploy/README.md, because 12 pods x 50 connections is 600 against a default
+# max_connections of 100.
+#
+# Scaling on CPU rather than on requests-per-second is deliberate: RPS is not
+# the thing that hurts. A burst of cheap cursor-paginated reads and a burst of
+# charges have wildly different costs, and CPU is what both actually consume.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: payments-api
+  namespace: payflow
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: payments-api
+  minReplicas: 3
+  maxReplicas: 12
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # 65%, not 85%. Payments traffic arrives in spikes — a merchant's
+          # campaign, a retry storm after an outage — and scaling up takes
+          # 30-60s to pull an image and pass readiness. The headroom is what
+          # covers that gap; at 85% the spike is served by a saturated pod.
+          averageUtilization: 65
+  behavior:
+    scaleUp:
+      # React fast. Under-provisioned payments means declined customers.
+      stabilizationWindowSeconds: 30
+    scaleDown:
+      # Come down slowly. Flapping replicas during a lull would drop in-flight
+      # charges for no saving worth having.
+      stabilizationWindowSeconds: 300
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fraud-service
+  namespace: payflow
+spec:
+  selector: { app: fraud-service }
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraud-service
+  namespace: payflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: fraud-service }
+  template:
+    metadata:
+      labels: { app: fraud-service }
+    spec:
+      containers:
+        - name: fraud-service
+          image: ${ECR_REGISTRY}/payflow-fraud:${IMAGE_TAG}
+          ports:
+            - containerPort: 8000
+          resources:
+            # Memory, not CPU, is the constraint: the XGBoost booster is held in
+            # memory per worker. The image runs one worker per container and
+            # scales by replica count, because extra workers multiply memory for
+            # no throughput gain on a task this short.
+            requests: { cpu: 100m, memory: 512Mi }
+            limits: { memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: { drop: [ALL] }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            # The booster load takes a few seconds; without this the pod is
+            # marked unready before it has had a chance to start.
+            initialDelaySeconds: 20
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bank-simulator
+  namespace: payflow
+spec:
+  selector: { app: bank-simulator }
+  ports:
+    - port: 8090
+      targetPort: 8090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bank-simulator
+  namespace: payflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: bank-simulator }
+  template:
+    metadata:
+      labels: { app: bank-simulator }
+    spec:
+      containers:
+        - name: bank-simulator
+          image: ${ECR_REGISTRY}/payflow-bank-simulator:${IMAGE_TAG}
+          ports:
+            - containerPort: 8090
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: { drop: [ALL] }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8090 }
+            periodSeconds: 10
+---
+# Webhook delivery. Scales horizontally BECAUSE the outbox poller and the
+# delivery loop both claim rows with FOR UPDATE SKIP LOCKED — each replica takes
+# rows nobody else holds, so adding replicas adds throughput instead of
+# contention.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook-worker
+  namespace: payflow
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: webhook-worker }
+  template:
+    metadata:
+      labels: { app: webhook-worker }
+    spec:
+      containers:
+        - name: webhook-worker
+          image: ${ECR_REGISTRY}/payflow-webhook-worker:${IMAGE_TAG}
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: payflow-db, key: url } }
+            - name: WEBHOOK_CONCURRENCY
+              value: "10"
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: { drop: [ALL] }
+---
+# EXACTLY ONE REPLICA. This is not a resource decision and must not be scaled.
+#
+# Unlike the webhook worker, reconciliation and the payout batch do not claim
+# work with SKIP LOCKED — they sweep. Two replicas would both sweep the same
+# rows on the same schedule, and the failure is financial rather than merely
+# wasteful: a payout batch run twice pays a merchant twice.
+#
+# Add a Postgres advisory lock around the job body before ever raising this.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+  namespace: payflow
+spec:
+  replicas: 1
+  strategy:
+    # Recreate, not RollingUpdate: a rolling deploy briefly runs the old and new
+    # pod together, which is the two-replica case this comment exists to
+    # prevent. A few seconds of no scheduler is harmless; two schedulers is not.
+    type: Recreate
+  selector:
+    matchLabels: { app: scheduler }
+  template:
+    metadata:
+      labels: { app: scheduler }
+    spec:
+      containers:
+        - name: scheduler
+          image: ${ECR_REGISTRY}/payflow-scheduler:${IMAGE_TAG}
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: payflow-db, key: url } }
+            - name: BANK_SIMULATOR_URL
+              value: http://bank-simulator:8090
+            - name: RECONCILE_INTERVAL
+              value: "1h"
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: { drop: [ALL] }

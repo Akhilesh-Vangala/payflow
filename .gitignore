@@ -1,0 +1,53 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+kaggle.json
+access_token
+*.pem
+*.key
+
+# ML training data — 1.2GB, re-downloadable via `make ml-data`
+backend/ml/data/raw/
+backend/ml/data/processed/
+*.csv
+*.zip
+*.parquet
+*.pkl
+*.joblib
+*.ubj
+
+# backend/ml/artifacts/ is deliberately NOT ignored. The trained model is 2.5MB,
+# the Docker build copies it in, and committing it is what makes the repo
+# runnable without a 4-minute training run first. Large models would belong in
+# object storage or LFS instead.
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Go
+/bin/
+*.exe
+*.test
+coverage.out
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Scratch — throwaway scripts, logs, experiments. Never committed.
+scratch/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# TypeScript incremental build cache — a build artifact, not source.
+frontend/dashboard/tsconfig.tsbuildinfo

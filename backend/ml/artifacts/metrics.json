@@ -1,0 +1,129 @@
+{
+  "dataset": "ieee",
+  "trained_at": "2026-09-04T03:45:26Z",
+  "rows_total": 590540,
+  "rows_train": 425188,
+  "rows_validation": 47244,
+  "rows_test": 118108,
+  "features": [
+    "amt",
+    "amt_log",
+    "amt_zscore_card",
+    "hour",
+    "day_of_week",
+    "is_night",
+    "is_weekend",
+    "txn_count_1h",
+    "txn_count_24h",
+    "txn_count_7d",
+    "amt_sum_24h",
+    "seconds_since_last_txn",
+    "card_brand_encoded",
+    "card_type_encoded",
+    "email_domain_encoded",
+    "product_encoded",
+    "addr_encoded",
+    "device_type_encoded",
+    "addr2",
+    "R_emaildomain",
+    "DeviceInfo"
+  ],
+  "best_iteration": 163,
+  "scale_pos_weight": 27.450184008029442,
+  "train": {
+    "pr_auc": 0.36887664144845667,
+    "roc_auc": 0.8902708933674148,
+    "fraud_rate": 0.035149157549131206,
+    "baseline_pr_auc": 0.035149157549131206,
+    "lift": 10.494608325472493,
+    "operating_points": {
+      "recall_50": {
+        "threshold": 0.7419911623001099,
+        "precision": 0.3085848783912128,
+        "recall": 0.500033456005353,
+        "true_positives": 7473,
+        "false_positives": 16744,
+        "false_negatives": 7472,
+        "legit_declined_per_10k": 408.1483413489079
+      },
+      "recall_70": {
+        "threshold": 0.5789393186569214,
+        "precision": 0.18862583169548675,
+        "recall": 0.6999665439946471,
+        "true_positives": 10461,
+        "false_positives": 44998,
+        "false_negatives": 4484,
+        "legit_declined_per_10k": 1096.862103680014
+      },
+      "recall_90": {
+        "threshold": 0.3533301055431366,
+        "precision": 0.08905470001721376,
+        "recall": 0.900033456005353,
+        "true_positives": 13451,
+        "false_positives": 137591,
+        "false_negatives": 1494,
+        "legit_declined_per_10k": 3353.89025528772
+      }
+    }
+  },
+  "test": {
+    "pr_auc": 0.18798217063108275,
+    "roc_auc": 0.7959792727982873,
+    "fraud_rate": 0.034409184813899145,
+    "baseline_pr_auc": 0.034409184813899145,
+    "lift": 5.463139323055098,
+    "operating_points": {
+      "recall_50": {
+        "threshold": 0.5840913653373718,
+        "precision": 0.14876638114063986,
+        "recall": 0.5,
+        "true_positives": 2032,
+        "false_positives": 11627,
+        "false_negatives": 2032,
+        "legit_declined_per_10k": 1019.5187822244046
+      },
+      "recall_70": {
+        "threshold": 0.40924352407455444,
+        "precision": 0.08949355143126769,
+        "recall": 0.7000492125984252,
+        "true_positives": 2845,
+        "false_positives": 28945,
+        "false_negatives": 1219,
+        "legit_declined_per_10k": 2538.0554873557576
+      },
+      "recall_90": {
+        "threshold": 0.234445258975029,
+        "precision": 0.052149119680661486,
+        "recall": 0.9000984251968503,
+        "true_positives": 3658,
+        "false_positives": 66487,
+        "false_negatives": 406,
+        "legit_declined_per_10k": 5829.942829083512
+      }
+    }
+  },
+  "feature_importance": {
+    "R_emaildomain": 0.17368678748607635,
+    "addr2": 0.1650661826133728,
+    "card_type_encoded": 0.14855791628360748,
+    "product_encoded": 0.0603579543530941,
+    "amt": 0.043327100574970245,
+    "email_domain_encoded": 0.0371784009039402,
+    "DeviceInfo": 0.035616565495729446,
+    "device_type_encoded": 0.035400617867708206,
+    "amt_log": 0.03273849934339523,
+    "seconds_since_last_txn": 0.03178156912326813,
+    "txn_count_7d": 0.030848078429698944,
+    "addr_encoded": 0.02963787131011486,
+    "card_brand_encoded": 0.02295348420739174,
+    "hour": 0.021410273388028145,
+    "amt_zscore_card": 0.021374111995100975,
+    "amt_sum_24h": 0.021209923550486565,
+    "is_night": 0.020519929006695747,
+    "txn_count_24h": 0.020036805421113968,
+    "is_weekend": 0.016484646126627922,
+    "txn_count_1h": 0.01591358333826065,
+    "day_of_week": 0.01589968614280224
+  },
+  "training_seconds": 191.1
+}

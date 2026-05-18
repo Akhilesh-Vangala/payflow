@@ -1,0 +1,108 @@
+# Two hostnames, and this is the single most important file for the PCI
+# argument.
+#
+#   api.${DOMAIN}     payments-api — public API, dashboard API, /pay/{code}
+#   vault.${DOMAIN}   the vault — the card iframe and /vault/tokenize
+#
+# THE VAULT MUST HAVE ITS OWN ORIGIN. Not a path on the API, not a sub-path
+# behind a rewrite. The entire PCI-scope reduction rests on the browser's
+# same-origin policy: the card fields live in a document from a different
+# origin, so the merchant's JavaScript — and any XSS on the merchant's page —
+# cannot read them.
+#
+# Serve the iframe from api.${DOMAIN}/vault/ and that protection evaporates
+# silently. Nothing errors, no test fails, and every merchant's checkout page
+# can suddenly read card numbers. It is the highest-consequence,
+# lowest-visibility mistake available in this system, which is why it is written
+# here rather than assumed.
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: payments-api
+  namespace: payflow
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443},{"HTTP":80}]'
+    # Card data over plaintext is not a thing that happens.
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: ${ACM_CERT_ARN}
+    # The ALB OVERWRITES X-Forwarded-For rather than appending to a
+    # client-supplied value. That is what makes the per-IP rate limits
+    # trustworthy — without a proxy that does this, a caller sets the header
+    # themselves and the per-IP budget is decorative.
+    alb.ingress.kubernetes.io/load-balancer-attributes: routing.http.xff_header_processing.mode=append
+
+    # WITHOUT THIS THE SERVICE IS DOWN FROM THE FIRST DEPLOY. The ALB defaults
+    # to GET / expecting 200; chi answers 404 there, so every target is marked
+    # unhealthy and the load balancer has nowhere to send traffic.
+    #
+    # /healthz, not /readyz. Readiness checks the database, and the ALB acting
+    # on that would pull every pod out of service during a brief RDS failover —
+    # turning a reconnect into an outage. Kubernetes already uses /readyz for
+    # endpoint membership, which is the right place for that distinction.
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+    # Must exceed the bank timeout, or the ALB cuts off a charge that is
+    # legitimately still waiting on the processor — producing exactly the
+    # ambiguous state reconciliation then has to resolve.
+    alb.ingress.kubernetes.io/target-group-attributes: |
+      deregistration_delay.timeout_seconds=45,
+      load_balancing.algorithm.type=least_outstanding_requests
+spec:
+  rules:
+    - host: api.${DOMAIN}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: payments-api
+                port:
+                  number: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vault
+  namespace: payflow-cde
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: ${ACM_CERT_ARN}
+    # A SEPARATE load balancer from the API's, not a second rule on the same
+    # one. Sharing an ALB would mean a misconfigured listener rule could route
+    # API traffic into the CDE, and it keeps the two access logs — one of which
+    # is in PCI scope — in separate places.
+    alb.ingress.kubernetes.io/group.name: payflow-cde
+    # Same reasoning as the API ingress: the default GET / check would 404 and
+    # take every vault pod out of service, which means no tokenization and so
+    # no payments anywhere.
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+spec:
+  rules:
+    - host: vault.${DOMAIN}
+      http:
+        paths:
+          # Only these two prefixes are exposed. /vault/detokenize is
+          # deliberately absent: it is reachable only from inside the cluster,
+          # from payments-api, and the NetworkPolicy enforces that. The shared
+          # secret it checks is defence in depth, not the control.
+          - path: /checkout
+            pathType: Prefix
+            backend:
+              service: { name: vault, port: { number: 8081 } }
+          - path: /vault/tokenize
+            pathType: Exact
+            backend:
+              service: { name: vault, port: { number: 8081 } }

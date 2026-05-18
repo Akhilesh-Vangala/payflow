@@ -1,0 +1,162 @@
+# NetworkPolicies are what turn the namespace split from documentation into
+# enforcement.
+#
+# REQUIRES A CNI THAT ENFORCES THEM. On EKS this means the VPC CNI with network
+# policy support enabled, or Calico/Cilium. With the default VPC CNI and network
+# policy DISABLED these objects are accepted by the API server and silently do
+# nothing — which is the worst possible outcome, because the cluster looks
+# protected. Verify with a pod that should be blocked, not with `kubectl get
+# networkpolicy`.
+
+# ---------------------------------------------------------------------------
+# Default deny, both directions, for the CDE.
+#
+# Written first and separately so that the allow rules below are additive. If
+# someone later deletes an allow rule the vault becomes unreachable; if someone
+# deletes THIS one, the vault becomes reachable by everything. Ordering the
+# failure modes that way round is deliberate.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: payflow-cde
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Ingress to the vault: exactly two sources, no more.
+#
+#   1. the ingress controller  — the browser must load the card iframe and POST
+#                                to /vault/tokenize, so this path is public by
+#                                necessity. It is the one the rate limiter
+#                                guards.
+#   2. payments-api            — /vault/detokenize, the only way a PAN leaves
+#                                this namespace, and only to be handed to the
+#                                acquirer.
+#
+# Note who is NOT here: the ledger, the dashboard, the workers, the fraud
+# service. None of them has any reason to reach a card number, so none of them
+# can, and that is a statement the cluster enforces rather than a convention the
+# code follows.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vault-ingress
+  namespace: payflow-cde
+spec:
+  podSelector:
+    matchLabels:
+      app: vault
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - port: 8081
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: payflow
+          podSelector:
+            matchLabels:
+              app: payments-api
+      ports:
+        - port: 8081
+          protocol: TCP
+---
+# Egress from the vault: Postgres, DNS, and AWS KMS. Nothing else.
+#
+# This is the anti-exfiltration control. If the vault were ever compromised —
+# a dependency with a backdoor, an RCE in a handler — this is what stops the
+# attacker POSTing a table of card numbers to a server they control. It is the
+# network-level counterpart of the `connect-src 'self'` CSP on the iframe, and
+# it exists for the same reason.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vault-egress
+  namespace: payflow-cde
+spec:
+  podSelector:
+    matchLabels:
+      app: vault
+  policyTypes: [Egress]
+  egress:
+    # DNS. Without this nothing resolves and every other rule is moot.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # RDS and ElastiCache, by CIDR because they are outside the cluster.
+    # Replace with the actual VPC subnet range for the data tier.
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/16
+      ports:
+        - port: 5432
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+    # KMS, for unwrapping data keys. HTTPS to anywhere is broader than ideal —
+    # tighten to a VPC endpoint's private IPs, which also keeps the traffic off
+    # the public internet entirely.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Block the instance metadata service. Reaching it from inside a
+              # pod is the classic route from container compromise to node IAM
+              # credentials, and IRSA means the vault has no reason to want it.
+              - 169.254.169.254/32
+      ports:
+        - port: 443
+          protocol: TCP
+---
+# The workers and the fraud service accept no inbound traffic at all.
+#
+# webhook-worker and scheduler poll the database and call out; nothing calls
+# them. Saying so explicitly means a future service cannot start talking to them
+# without someone changing this file.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: workers-no-ingress
+  namespace: payflow
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [webhook-worker, scheduler]
+  policyTypes: [Ingress]
+---
+# The fraud service is reachable only from payments-api. It scores transactions
+# and has no other caller — and, notably, it never sees a card number, only
+# derived features.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fraud-service-ingress
+  namespace: payflow
+spec:
+  podSelector:
+    matchLabels:
+      app: fraud-service
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: payments-api
+      ports:
+        - port: 8000
+          protocol: TCP

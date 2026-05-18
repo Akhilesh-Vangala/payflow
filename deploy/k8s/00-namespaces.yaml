@@ -1,0 +1,40 @@
+# Two namespaces, and the split is the entire point of this directory.
+#
+# PCI scope is defined by network reachability: anything that can reach the
+# cardholder data environment is in scope and gets audited. So the whole game is
+# making that set small and PROVABLE. `payflow-cde` holds exactly one workload —
+# the vault, the only process that ever sees a raw card number — and everything
+# else lives in `payflow` and reaches it through one allowed path.
+#
+# Be honest about what this does and does not buy. Namespaces are a scoping
+# mechanism, not a security boundary: anyone with cluster-admin can exec into a
+# vault pod and read decrypted PANs out of memory. A QSA will find that. The
+# strongest isolation AWS sells is an ACCOUNT boundary, and a mature deployment
+# puts the CDE in its own account entirely.
+#
+# That move is deliberately cheap here: the vault talks HTTP with a shared
+# secret and has no other coupling to anything, so lifting it into a separate
+# account is a change to VAULT_URL and a security group — not a rewrite. Drawing
+# the boundary there in the first place is what makes that true.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: payflow
+  labels:
+    name: payflow
+    pci-scope: "out-of-scope"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: payflow-cde
+  labels:
+    name: payflow-cde
+    # Cardholder data environment. Everything in here is in PCI scope.
+    pci-scope: "in-scope"
+    # Enforce the restricted Pod Security Standard: no privileged containers,
+    # no host namespaces, no running as root. The vault image already satisfies
+    # this (distroless, USER nonroot); the label makes it impossible to
+    # accidentally deploy something into this namespace that does not.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

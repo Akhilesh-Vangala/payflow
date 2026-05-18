@@ -1,0 +1,236 @@
+# Local stack (§25.3) — the full system on a laptop, no AWS account required.
+#
+# LocalStack is the piece that makes this faithful rather than mocked: the Go
+# services call the real AWS SDK for SQS/SES/S3/Secrets Manager, just pointed at
+# localhost. The integration code under test is the same code that runs in
+# production, which is exactly the gap a hand-rolled mock leaves open.
+
+name: payflow
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    # pg_stat_statements has to be preloaded at startup; it cannot be enabled
+    # on a running server. Without it there is no way to answer "which query is
+    # actually costing us" other than catching statements in flight via
+    # pg_stat_activity, which only ever samples the slow ones.
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+    environment:
+      POSTGRES_USER: payflow
+      POSTGRES_PASSWORD: payflow
+      POSTGRES_DB: payflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Applied alphabetically on first boot of an empty data volume.
+      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payflow -d payflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    # appendonly keeps rate-limit and velocity counters across a restart.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Kafka-API compatible and far lighter than real Kafka for local dev (§25.3).
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    command:
+      - redpanda start
+      - --overprovisioned
+      - --smp 1
+      - --memory 1G
+      - --reserve-memory 0M
+      - --node-id 0
+      - --check=false
+      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+    ports:
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  localstack:
+    image: localstack/localstack:3.8
+    environment:
+      SERVICES: sqs,ses,s3,secretsmanager
+      DEBUG: "0"
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./backend/scripts/localstack-init.sh:/etc/localstack/init/ready.d/init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Catches "sent" email so tests can read an OTP out of a real inbox (§25.1).
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # web UI — http://localhost:8025
+
+  bank-simulator:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE: bank-simulator
+    environment:
+      PORT: "8090"
+      SIM_TIMEOUT_HOLD: "10s"
+      SIM_DELAY_HOLD: "30s"
+    ports:
+      - "8090:8090"
+    healthcheck:
+      test: ["CMD", "/app/healthcheck", "http://localhost:8090/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # The only service that ever sees a raw card number (§2.4). In production it
+  # runs in its own network segment with its own KMS key, reachable only by the
+  # checkout iframe and the charge-submission path — not by payments-api's
+  # general traffic, and never by the ledger or dashboard.
+  vault:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE: vault
+    environment:
+      PORT: "8081"
+      PAYFLOW_ENV: development
+      DATABASE_URL: postgres://payflow:payflow@postgres:5432/payflow?sslmode=disable
+      # Development values. Production sources both from Secrets Manager, and
+      # the service refuses to start without them.
+      VAULT_MASTER_KEY: ${VAULT_MASTER_KEY:-}
+      VAULT_INTERNAL_SECRET: dev-only-internal-secret
+      VAULT_TOKEN_TTL: "15m"
+      CARD_HASH_SALT: dev-only-insecure-salt
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/healthcheck", "http://localhost:8081/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Fraud scoring (§14.3). Note what payments-api does NOT declare below: a
+  # depends_on for this service. That is deliberate — the charge path falls
+  # open to the rule engine if scoring is unavailable, so payments must be able
+  # to start and serve while this is down.
+  fraud-service:
+    build:
+      context: ./backend
+      dockerfile: ml/Dockerfile
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      # The booster load takes a few seconds; without this the container is
+      # marked unhealthy before it has had a chance to start.
+      start_period: 20s
+
+  payments-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE: payments-api
+    environment:
+      PORT: "8080"
+      PAYFLOW_ENV: development
+      DATABASE_URL: postgres://payflow:payflow@postgres:5432/payflow?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      BANK_SIMULATOR_URL: http://bank-simulator:8090
+      BANK_TIMEOUT: "5s"
+      VAULT_URL: http://vault:8081
+      VAULT_INTERNAL_SECRET: dev-only-internal-secret
+      VAULT_TIMEOUT: "3s"
+      FRAUD_SERVICE_URL: http://fraud-service:8000
+      # Tight: slow scoring is treated as unavailable and falls back to rules.
+      FRAUD_TIMEOUT: "50ms"
+      CARD_HASH_SALT: dev-only-insecure-salt
+      LOG_LEVEL: info
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      vault:
+        condition: service_started
+      bank-simulator:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "/app/healthcheck", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Outbox poller + webhook delivery (§7, §22.1).
+  webhook-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE: webhook-worker
+    environment:
+      DATABASE_URL: postgres://payflow:payflow@postgres:5432/payflow?sslmode=disable
+      WEBHOOK_CONCURRENCY: "10"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Periodic jobs (§9). Reconciliation resolves ambiguous charges against the
+  # processor's log and re-derives the ledger invariants.
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        SERVICE: scheduler
+    environment:
+      DATABASE_URL: postgres://payflow:payflow@postgres:5432/payflow?sslmode=disable
+      BANK_SIMULATOR_URL: http://bank-simulator:8090
+      RECONCILE_INTERVAL: "1h"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      bank-simulator:
+        condition: service_started
+
+volumes:
+  pgdata:
+  redisdata:

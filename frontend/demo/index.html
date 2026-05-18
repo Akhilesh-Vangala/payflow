@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Demo Store — PayFlow Checkout</title>
+<!--
+  A merchant's own checkout page.
+
+  The point is what this page CANNOT do. The card fields below live in an
+  iframe served from PayFlow's origin, so nothing here — no script, no devtools
+  expression, no XSS payload on this page — can read the card number. This page
+  only ever receives an opaque token.
+
+  It also holds no secret key. The token goes to this merchant's own server,
+  which has the key, and that server calls PayFlow. Three parties, and no two
+  of them hold both halves.
+-->
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; padding: 3rem 1rem;
+    background: #f4f5f7; color: #1a1d23;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #12141a; color: #e8eaed; }
+    .panel { background: #1c1f26 !important; border-color: #2a2f3a !important; }
+    .line, .row { border-color: #2a2f3a !important; }
+    pre { background: #12141a !important; border-color: #2a2f3a !important; }
+    input { background: #12141a !important; border-color: #2a2f3a !important; color: inherit; }
+  }
+
+  .wrap { max-width: 940px; margin: 0 auto; display: grid; gap: 20px; }
+  @media (min-width: 860px) { .wrap { grid-template-columns: 400px 1fr; align-items: start; } }
+
+  .panel {
+    background: #fff; border: 1px solid #e3e6ea; border-radius: 14px; padding: 24px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06), 0 8px 28px rgba(0,0,0,.04);
+  }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  h2 { font-size: 12px; margin: 0 0 12px; text-transform: uppercase; letter-spacing: .05em; color: #6b7280; }
+  .sub { color: #6b7280; font-size: 13px; margin: 0 0 18px; }
+
+  .line { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eceff2; font-size: 14px; }
+  .line:last-of-type { border-bottom: 0; font-weight: 650; }
+
+  #mount { margin: 16px 0 4px; min-height: 168px; }
+
+  button {
+    width: 100%; padding: 12px; margin-top: 8px;
+    font: inherit; font-weight: 650; color: #fff;
+    background: #5b6be8; border: 0; border-radius: 8px; cursor: pointer;
+    transition: background .12s, opacity .12s;
+  }
+  button:hover:not(:disabled) { background: #4a59d4; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  .field { display: flex; gap: 8px; align-items: center; margin: 14px 0 4px; }
+  .field label { font-size: 12px; color: #6b7280; min-width: 60px; }
+  .field input, .field select {
+    flex: 1; padding: 8px 10px; font: inherit; border: 1px solid #d4d8de;
+    border-radius: 6px; background: #fff; color: inherit;
+  }
+
+  pre {
+    margin: 0; padding: 12px; background: #f7f8fa; border: 1px solid #e3e6ea;
+    border-radius: 8px; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap; word-break: break-word; max-height: 280px; overflow: auto;
+  }
+  .ok { color: #0a7d4b; } .bad { color: #c0392b; } .warn { color: #b45309; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #eceff2; font-size: 13px; }
+  .row:last-child { border-bottom: 0; }
+  .muted { color: #6b7280; font-size: 12px; }
+  .empty { color: #9aa1ab; font-size: 13px; padding: 6px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="panel">
+    <h1>Demo Store</h1>
+    <p class="sub">A merchant page that cannot see card numbers.</p>
+
+    <div class="line"><span>Mechanical keyboard</span><span id="item">$89.00</span></div>
+    <div class="line"><span>Shipping</span><span>$6.00</span></div>
+    <div class="line"><span>Total</span><span id="total">$95.00</span></div>
+
+    <div class="field">
+      <label for="amount">Amount</label>
+      <input id="amount" type="number" value="95.00" step="0.01" min="0.50">
+    </div>
+
+    <!-- Test mode only. Live keys ignore this header, so a merchant cannot
+         steer the real processor. It is here to make the failure paths
+         reachable by hand — especially `timeout`, which is the one most
+         integrations get wrong. -->
+    <div class="field">
+      <label for="outcome">Simulate</label>
+      <select id="outcome">
+        <option value="success">success</option>
+        <option value="decline">decline</option>
+        <option value="timeout">timeout → 202 unresolved</option>
+      </select>
+    </div>
+
+    <div id="mount"></div>
+    <button id="pay">Pay</button>
+    <p class="muted" style="margin-top:10px">
+      4242 4242 4242 4242 · any future expiry · any CVC
+    </p>
+  </div>
+
+  <div style="display:grid; gap:20px">
+    <div class="panel">
+      <h2>Orders on the merchant's server</h2>
+      <div id="orders"><div class="empty">No orders yet.</div></div>
+    </div>
+    <div class="panel">
+      <h2>What is happening</h2>
+      <pre id="log">Loading the secure card frame…</pre>
+    </div>
+  </div>
+
+</div>
+
+<script src="http://localhost:8081/checkout/payflow.js"></script>
+<script>
+  var VAULT = 'http://localhost:8081';
+  var logEl = document.getElementById('log');
+  var payBtn = document.getElementById('pay');
+  var amountEl = document.getElementById('amount');
+
+  function log(msg, cls) {
+    var t = new Date().toLocaleTimeString();
+    logEl.innerHTML += '\n<span class="' + (cls || '') + '">' + t + '  ' + msg + '</span>';
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  amountEl.addEventListener('input', function () {
+    var v = parseFloat(amountEl.value || '0');
+    document.getElementById('total').textContent = '$' + (isNaN(v) ? 0 : v).toFixed(2);
+  });
+
+  var payflow = PayFlow('pk_test_demo', { vaultUrl: VAULT });
+  var card = payflow.createCardElement('#mount');
+
+  card.on('ready', function () {
+    logEl.textContent = 'Card frame loaded from ' + VAULT;
+    log('Served from PayFlow\'s origin — this page cannot read inside it.');
+  });
+  card.on('change', function (e) {
+    if (e.network && e.network !== 'unknown') log('Detected ' + e.network);
+  });
+
+  async function refreshOrders() {
+    try {
+      var res = await fetch('/orders');
+      var body = await res.json();
+      var el = document.getElementById('orders');
+      if (!body.data || !body.data.length) {
+        el.innerHTML = '<div class="empty">No orders yet.</div>';
+        return;
+      }
+      el.innerHTML = body.data.map(function (o) {
+        var cls = o.status === 'paid' ? 'ok' : o.status === 'pending' ? 'warn' : 'bad';
+        var brand = o.card_brand ? o.card_brand + ' ····' + o.card_last4 : '';
+        return '<div class="row"><span><strong>$' + (o.amount / 100).toFixed(2) +
+          '</strong> <span class="muted">' + brand + '</span></span>' +
+          '<span class="' + cls + '">' + o.status +
+          (o.failure ? ' <span class="muted">· ' + o.failure + '</span>' : '') +
+          '</span></div>';
+      }).join('');
+    } catch (_) { /* merchant server not up */ }
+  }
+
+  payBtn.addEventListener('click', async function () {
+    payBtn.disabled = true;
+    var amount = Math.round(parseFloat(amountEl.value || '0') * 100);
+    var outcome = document.getElementById('outcome').value;
+
+    log('Asking the vault for a token…');
+    var result = await card.tokenize();
+
+    if (result.error) {
+      log('Error: ' + result.error.message, 'bad');
+      payBtn.disabled = false;
+      return;
+    }
+
+    log('Got ' + result.token, 'ok');
+    log('Card: ' + result.brand + ' ····' + result.last4 + ' — the number stayed in the frame.');
+    log('Sending the TOKEN to the merchant server (which holds the secret key).');
+
+    try {
+      var res = await fetch('/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Simulate-Outcome': outcome },
+        body: JSON.stringify({ payment_token: result.token, amount: amount, currency: 'USD' }),
+      });
+      var order = await res.json();
+
+      if (order.status === 'paid') {
+        log('Charged. ' + order.id + ' → ' + order.charge_id, 'ok');
+        log('Now visible in the PayFlow dashboard.', 'ok');
+        card.clear();
+      } else if (order.status === 'pending') {
+        log('202 — PayFlow could not confirm the outcome.', 'warn');
+        log('Do NOT ship. Reconciliation resolves it within the hour.', 'warn');
+        card.clear();
+      } else {
+        log('Declined: ' + (order.failure || order.error || 'unknown'), 'bad');
+      }
+    } catch (err) {
+      log('Could not reach the merchant server. Is it running on :3000?', 'bad');
+    }
+
+    await refreshOrders();
+    payBtn.disabled = false;
+  });
+
+  refreshOrders();
+  setInterval(refreshOrders, 5000);
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+-- Behavioral biometrics captured at tokenization (§14.2 extension).
+--
+-- Stored on the TOKEN rather than sent by the merchant, deliberately. These
+-- are fraud signals: if the merchant's own page supplied them, a compromised
+-- or complicit integration could simply claim the typing looked human. Only
+-- the vault's iframe observes the keystrokes, so only the vault can attest to
+-- them, and the value travels with the token the charge already references.
+--
+-- Aggregates only — never per-keystroke timings, which are biometric data
+-- under GDPR Art. 9 and Illinois BIPA and could reconstruct what was typed.
+ALTER TABLE vault_tokens ADD COLUMN behavior JSONB;

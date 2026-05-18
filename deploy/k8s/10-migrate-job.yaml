@@ -1,0 +1,55 @@
+# Schema migrations run as a Job, before anything else is deployed.
+#
+# Not an initContainer on payments-api, which is the tempting shortcut. An
+# initContainer runs once per POD, so a three-replica rolling deploy would start
+# three concurrent migration runs. The runner takes a Postgres advisory lock and
+# would survive that, but the second and third pods would then sit blocked
+# behind the first for the length of the migration while Kubernetes counted
+# their readiness probes as failures.
+#
+# A Job runs once, cluster-wide, and the deploy waits for it:
+#
+#   kubectl apply -f 10-migrate-job.yaml
+#   kubectl wait --for=condition=complete job/payflow-migrate -n payflow --timeout=10m
+#   kubectl apply -f 20-vault.yaml -f 30-payments-api.yaml ...
+#
+# ADOPTING AN EXISTING DATABASE: one built by docker-entrypoint-initdb.d has the
+# tables but no schema_migrations. Run the job once with `-baseline` in args
+# first, which records every migration as applied without executing it. Get that
+# wrong on a database that is genuinely empty and you get a schema-less system
+# that believes it is fully migrated.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: payflow-migrate
+  namespace: payflow
+spec:
+  # A failed migration is not something to retry blindly — it usually means the
+  # SQL is wrong, and running it again just produces the same error with a
+  # second confusing log. One attempt, then a human looks.
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: payflow-migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: ${ECR_REGISTRY}/payflow-migrate:${IMAGE_TAG}
+          # args: ["-baseline"]   # only when adopting an initdb-built database
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: payflow-db
+                  key: url
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: [ALL]

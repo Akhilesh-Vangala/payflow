@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>{{.Link.Name}} — {{.Link.BusinessName}}</title>
+<!--
+  PayFlow's hosted payment page.
+
+  Served by PayFlow, not by the merchant. The merchant has no server in this
+  flow at all — they made a link in the dashboard and sent someone the URL.
+
+  Three separate origins are still involved, and the separation is the same one
+  the embedded integration has:
+
+    this page   PayFlow's payments origin — knows the price, holds no key
+    the iframe  PayFlow's vault origin    — the only document that sees the PAN
+    the charge  PayFlow's server          — reads the price from its own database
+
+  Note what this page cannot do. It cannot read the card, because the fields are
+  in a document from a different origin. It cannot change the price, because it
+  never sends one — the amount below is display text, and the server reads the
+  real number from the checkout_sessions row.
+-->
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f5f7; --panel: #fff; --line: #e3e6ea; --text: #1a1d23;
+    --muted: #6b7280; --accent: #5b6be8; --accent-hover: #4a59d4;
+    --ok: #0f8a5f; --err: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12141a; --panel: #1c1f26; --line: #2a2f3a; --text: #e8eaed;
+      --muted: #9aa1ad;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; padding: 2.5rem 1rem;
+    display: flex; align-items: flex-start; justify-content: center;
+    background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .card {
+    width: 100%; max-width: 420px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 16px; padding: 28px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06), 0 12px 32px rgba(0,0,0,.05);
+  }
+  .biz { font-size: 13px; color: var(--muted); margin: 0 0 4px; }
+  h1 { font-size: 19px; margin: 0 0 6px; font-weight: 650; }
+  .desc { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
+  .amount {
+    font-size: 30px; font-weight: 680; letter-spacing: -.02em;
+    padding: 14px 0 18px; border-bottom: 1px solid var(--line); margin-bottom: 18px;
+  }
+  .amount span { font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 6px; }
+  #mount { min-height: 168px; margin-bottom: 6px; }
+  button {
+    width: 100%; padding: 13px; font: inherit; font-weight: 650; color: #fff;
+    background: var(--accent); border: 0; border-radius: 9px; cursor: pointer;
+    transition: background .12s, opacity .12s;
+  }
+  button:hover:not(:disabled) { background: var(--accent-hover); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  #status { margin-top: 14px; font-size: 14px; min-height: 20px; }
+  #status.err { color: var(--err); }
+  #status.ok  { color: var(--ok); }
+  .foot {
+    margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line);
+    font-size: 12px; color: var(--muted); text-align: center;
+  }
+  .done { text-align: center; padding: 20px 0; }
+  .done .tick { font-size: 40px; line-height: 1; }
+  .done h2 { font-size: 17px; margin: 12px 0 4px; }
+  .done p { color: var(--muted); font-size: 14px; margin: 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <main class="card">
+    <p class="biz">{{.Link.BusinessName}}</p>
+    <h1>{{.Link.Name}}</h1>
+    {{if .Link.Description}}<p class="desc">{{.Link.Description}}</p>{{end}}
+
+    <div id="form">
+      <div class="amount">{{.Amount}}</div>
+      <div id="mount"></div>
+      <button id="pay" type="button">Pay {{.Amount}}</button>
+      <p id="status"></p>
+    </div>
+
+    <div id="done" class="done" hidden>
+      <div class="tick">&#10003;</div>
+      <h2 id="done-title">Payment complete</h2>
+      <p id="done-body"></p>
+    </div>
+
+    <p class="foot">
+      Secured by PayFlow. Your card details are entered directly into PayFlow
+      and are never seen by {{.Link.BusinessName}}.
+    </p>
+  </main>
+
+  <!--
+    Both scripts are external files, not inline. The CSP lesson from the vault's
+    iframe applies here too: an inline <script> is the thing a content policy
+    cannot distinguish from an injected one.
+  -->
+  <script src="{{.VaultURL}}/checkout/payflow.js"></script>
+  <script
+    src="/pay/static/pay.js"
+    data-code="{{.Link.Code}}"
+    data-vault="{{.VaultURL}}"></script>
+</body>
+</html>
