@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/assets/branding/payflow-banner.svg" alt="PayFlow — Exactly-once charges with a double-entry ledger" width="100%"></p>
 
-**Try the merchant UI:** [Open PayFlow](https://payflow.vercel.app/) · [Architecture](docs/ARCHITECTURE.md) · [Build log](docs/BUILD_LOG.md) · [Fraud model card](backend/ml/MODEL_CARD.md)
+**Try the merchant UI:** [Open PayFlow](https://payflow-mu-amber.vercel.app/) · [Architecture](docs/ARCHITECTURE.md) · [Build log](docs/BUILD_LOG.md) · [Fraud model card](backend/ml/MODEL_CARD.md)
 
 <p align="center">Go · Postgres · Redis · React · Docker Compose</p>
 
@@ -8,21 +8,19 @@
 
 **Exactly-once charges. Correct ledger.** A payment gateway where concurrent retries share one idempotency key, one bank authorization, and one balanced ledger write.
 
-[**Open the dashboard ↗**](https://payflow.vercel.app/) · [Transaction flow](docs/PAYMENT_TRANSACTION_FLOW.md) · [System design](docs/payment-gateway-system-design_updated.md) · [Merchant example](backend/examples/merchant-server/README.md)
+[**Open the dashboard ↗**](https://payflow-mu-amber.vercel.app/) · [Transaction flow](docs/PAYMENT_TRANSACTION_FLOW.md) · [System design](docs/payment-gateway-system-design_updated.md) · [Merchant example](backend/examples/merchant-server/README.md)
 
 ## The business problem
 
 Accept a charge that may be retried a hundred times after a lost response — without double-authorizing the bank or posting an unbalanced ledger entry.
 
-## See the workbench
-
-![PayFlow merchant dashboard](docs/assets/demos/payflow-dashboard.png)
-
-Merchant-facing React dashboard for signup, charges, refunds, and activity. The full Go stack (payments API, vault, bank simulator, webhooks, fraud scoring) runs locally with Docker Compose; the public URL hosts the dashboard UI.
+## What it proves
 
 ```
 100 concurrent requests · 1 idempotency key → 1 bank authorization, 1 charge
 ```
+
+Open the [merchant dashboard](https://payflow-mu-amber.vercel.app/) for the React UI. The full Go stack (payments API, vault, bank simulator, webhooks, fraud scoring) runs locally with Docker Compose.
 
 ## Architecture and authority
 
