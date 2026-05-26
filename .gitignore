@@ -54,3 +54,5 @@ frontend/dashboard/tsconfig.tsbuildinfo
 .vercel
 .env*
 .vercel
+frontend/dashboard/dist/
+frontend/dashboard/node_modules/

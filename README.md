@@ -1,32 +1,32 @@
 <p align="center"><img src="docs/assets/branding/payflow-banner.svg" alt="PayFlow — Exactly-once charges with a double-entry ledger" width="100%"></p>
 
-**Try the merchant UI:** [Open PayFlow](https://payflow-mu-amber.vercel.app/) · [Architecture](docs/ARCHITECTURE.md) · [Build log](docs/BUILD_LOG.md) · [Fraud model card](backend/ml/MODEL_CARD.md)
+**Exactly-once charges. Correct ledger.** [Open the dashboard](https://payflow-mu-amber.vercel.app/) · [Architecture](docs/ARCHITECTURE.md) · [Docs index](docs/README.md)
 
 <p align="center">Go · Postgres · Redis · React · Docker Compose</p>
 
 # PayFlow
 
-**Exactly-once charges. Correct ledger.** A payment gateway where concurrent retries share one idempotency key, one bank authorization, and one balanced ledger write.
+A payment gateway built so concurrent retries with one idempotency key produce **one bank authorization and one balanced ledger write** — not “once-ish.”
 
-[**Open the dashboard ↗**](https://payflow-mu-amber.vercel.app/) · [Transaction flow](docs/PAYMENT_TRANSACTION_FLOW.md) · [System design](docs/payment-gateway-system-design_updated.md) · [Merchant example](backend/examples/merchant-server/README.md)
-
-## The business problem
-
-Accept a charge that may be retried a hundred times after a lost response — without double-authorizing the bank or posting an unbalanced ledger entry.
-
-## What it proves
+[**Open the dashboard ↗**](https://payflow-mu-amber.vercel.app/) · [Transaction flow](docs/PAYMENT_TRANSACTION_FLOW.md) · [System design](docs/payment-gateway-system-design_updated.md) · [Merchant integration example](backend/examples/merchant-server/README.md)
 
 ```
 100 concurrent requests · 1 idempotency key → 1 bank authorization, 1 charge
 ```
 
-Open the [merchant dashboard](https://payflow-mu-amber.vercel.app/) for the React UI. The full Go stack (payments API, vault, bank simulator, webhooks, fraud scoring) runs locally with Docker Compose.
+## What you get
 
-## Architecture and authority
+| Surface | What it is |
+| --- | --- |
+| **Public dashboard** | Merchant UI (sign-in, keys, charges, refunds, payment links) at [payflow-mu-amber.vercel.app](https://payflow-mu-amber.vercel.app/) |
+| **Local full stack** | Payments API, vault, bank simulator, webhooks, fraud scoring, Postgres, Redis — via `make up` |
+| **Not included** | Real money movement, sponsor bank, KYC vendor, or PCI QSA — bank is a deterministic simulator |
+
+## Architecture
 
 ![PayFlow architecture](docs/assets/diagrams/payflow-architecture.svg)
 
-Checkout collects card data only inside the vault iframe. Payments API accepts opaque tokens, claims work with `INSERT … ON CONFLICT`, and commits the charge, ledger legs, and outbox row in one Postgres transaction. Risk rules run first; the fraud model can raise a verdict but never clear a hard block.
+Card data is entered only in the vault iframe. The Payments API accepts opaque tokens, claims work with `INSERT … ON CONFLICT` on `(merchant_id, idempotency_key)`, and commits the charge, ledger legs, and outbox row in **one** Postgres transaction. Risk rules run first; the fraud model can raise a verdict but never clears a hard block.
 
 ```mermaid
 %%{init: {"theme": "neutral"}}%%
@@ -40,59 +40,61 @@ flowchart LR
   Hooks --> Recon[Reconcile ambiguous]
 ```
 
-| Component | Owned responsibility |
+| Component | Responsibility |
 | --- | --- |
-| Vault | Only process that ever sees a PAN; tokens + last4/BIN everywhere else |
-| Payments API | Idempotent charges, refunds, disputes, merchant read APIs |
-| Ledger | Debits = credits enforced in Go, deferred DB triggers, and reconciliation |
-| Risk / ML | Explainable rules first; XGBoost second; circuit-breaker fail-open to rules |
+| Vault | Only process that ever sees a PAN |
+| Payments API | Idempotent charges, refunds, disputes, merchant APIs |
+| Ledger | Debits = credits in Go, deferred DB triggers, and reconciliation |
+| Risk / ML | Explainable rules first; XGBoost second; fail-open to rules |
 | Webhooks / scheduler | Outbox delivery with retry/DLQ; hourly reconcile; daily payouts |
-| Dashboard / demo | React merchant UI and checkout demo for the iframe boundary |
+| Dashboard / demo | React merchant UI and checkout iframe demo |
 
-**Not a licensed money transmitter.** The acquiring bank is a deterministic simulator. APIs and algorithms are built for real; institutional contracts (sponsor bank, KYC vendor, PCI QSA) are stubbed and documented.
+## Design decisions
+
+1. **Postgres is the lock** — not Redis. Claim, ledger, and outbox share one `pgx.Tx`.
+2. **The ledger is enforced by the database** — Go check, deferred constraint trigger, append-only entries.
+3. **Ambiguous is not failed** — processor timeouts mark `requires_reconciliation`; no blind retry.
+4. **A raw card number exists in exactly one service** — vault origin + type system + Luhn scan on the charge API.
 
 ## Repository layout
 
 ```text
 payflow/
 ├── backend/
-│   ├── cmd/                 payments-api, vault, bank-simulator, webhook-worker, scheduler
-│   ├── internal/            money, ledger, idempotency, payments, vault, risk, reconcile
-│   ├── migrations/          numbered SQL applied in order
-│   ├── ml/                  fraud training, features, serving
-│   ├── examples/            merchant-server integration sample
-│   └── test/                load scripts (k6)
+│   ├── cmd/            payments-api, vault, bank-simulator, webhook-worker, scheduler
+│   ├── internal/       money, ledger, idempotency, payments, vault, risk, reconcile
+│   ├── migrations/     numbered SQL
+│   ├── ml/             fraud training and serving
+│   ├── examples/       merchant-server sample
+│   └── test/load/      k6 idempotency script
 ├── frontend/
-│   ├── dashboard/           React + TypeScript merchant UI
-│   └── demo/                checkout page (iframe boundary)
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── BUILD_LOG.md
-│   └── assets/              branding, diagrams, demos
-├── deploy/                  Kubernetes manifests
+│   ├── dashboard/      React + TypeScript merchant UI (Vercel root)
+│   └── demo/           checkout page (iframe boundary)
+├── docs/               architecture, build log, design notes, assets
+├── deploy/             Kubernetes manifests
 ├── docker-compose.yml
 └── Makefile
 ```
-
-## Design decisions worth defending
-
-1. **Postgres is the lock, not Redis** — `UNIQUE (merchant_id, idempotency_key)` with `ON CONFLICT DO NOTHING`. Claim, ledger, and outbox share one `pgx.Tx`.
-2. **The ledger is enforced by the database** — Go check, deferred constraint trigger, and reconciliation. Append-only: no `UPDATE`/`DELETE` on entries.
-3. **Ambiguous is not failed** — processor timeouts mark `requires_reconciliation`; no blind retry that could double-pay.
-4. **A raw card number exists in exactly one service** — vault origin iframe + type system + Luhn scan on the charge API.
 
 ## Run locally
 
 ```sh
 git clone https://github.com/Akhilesh-Vangala/payflow.git
 cd payflow
-make up                    # full local stack
-make seed                  # prints an sk_test_... key (shown once)
-make dashboard             # merchant UI on :5173
-make test                  # unit + integration (Docker / testcontainers)
+make up          # full stack
+make seed        # prints sk_test_... once
+make dashboard   # UI on :5173 (API on :8080)
+make test        # unit + integration (Docker / testcontainers)
 ```
 
-Ports: payments `8080`, vault `8081`, fraud scoring `8000`, bank simulator `8090`, Mailhog `8025`, dashboard `5173`.
+| Service | Port |
+| --- | --- |
+| Payments API | 8080 |
+| Vault | 8081 |
+| Fraud scoring | 8000 |
+| Bank simulator | 8090 |
+| Mailhog UI | 8025 |
+| Dashboard | 5173 |
 
 ```sh
 TOKEN=$(curl -s -X POST localhost:8081/vault/tokenize \
@@ -107,7 +109,7 @@ curl -X POST localhost:8080/v1/charges \
   -d "{\"amount\":4500,\"currency\":\"USD\",\"payment_token\":\"$TOKEN\"}"
 ```
 
-Same `Idempotency-Key` twice → same charge body, no second authorization.
+Reuse the same `Idempotency-Key` → same charge body, no second authorization.
 
 ## Engineering evidence
 
@@ -125,22 +127,14 @@ make test-race
 k6 run -e API_KEY=sk_test_... backend/test/load/idempotency.js
 ```
 
-Fraud stack: 17 rules (~422ns) then IEEE-CIS XGBoost. Test PR-AUC and failure modes are documented in [`backend/ml/MODEL_CARD.md`](backend/ml/MODEL_CARD.md).
-
-## Operating limits
-
-| | |
-| --- | --- |
-| Real money movement | Not supported — bank is a simulator |
-| Sponsor bank / money transmitter licence | Out of scope |
-| KYC / sanctions / PCI QSA | Stubbed or vendor-shaped; not claimed |
-| Public dashboard | UI demo; full gateway stack is local Compose |
+Fraud: 17 rules (~422ns) then IEEE-CIS XGBoost. Details in [`backend/ml/MODEL_CARD.md`](backend/ml/MODEL_CARD.md).
 
 ## Documentation
 
 | Doc | Contents |
 | --- | --- |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Services, tables, full charge flow |
+| [`docs/README.md`](docs/README.md) | Documentation index |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Services, tables, charge flow |
 | [`docs/BUILD_LOG.md`](docs/BUILD_LOG.md) | Build order and bugs paid for |
 | [`docs/PAYMENT_TRANSACTION_FLOW.md`](docs/PAYMENT_TRANSACTION_FLOW.md) | End-to-end payment path |
 | [`backend/ml/MODEL_CARD.md`](backend/ml/MODEL_CARD.md) | Fraud model card |
