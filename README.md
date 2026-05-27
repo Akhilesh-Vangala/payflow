@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/assets/branding/payflow-banner.svg" alt="PayFlow — Exactly-once charges with a double-entry ledger" width="100%"></p>
+<p align="center"><img src="docs/assets/branding/payflow-banner.svg" alt="PayFlow banner" width="100%" /></p>
 
 **Exactly-once charges. Correct ledger.** [Open the dashboard](https://payflow-mu-amber.vercel.app/) · [Architecture](docs/ARCHITECTURE.md) · [Docs index](docs/README.md)
 
