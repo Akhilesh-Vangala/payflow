@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/assets/branding/payflow-banner.svg" alt="PayFlow banner" width="100%" /></p>
+<p align="center"><img src="docs/assets/branding/payflow-banner.png" alt="PayFlow banner" width="100%" /></p>
 
 **Exactly-once charges. Correct ledger.** [Open the dashboard](https://payflow-mu-amber.vercel.app/) · [Architecture](docs/ARCHITECTURE.md) · [Docs index](docs/README.md)
 
@@ -24,7 +24,7 @@ A payment gateway built so concurrent retries with one idempotency key produce *
 
 ## Architecture
 
-![PayFlow architecture](docs/assets/diagrams/payflow-architecture.svg)
+![PayFlow architecture](docs/assets/diagrams/payflow-architecture.png)
 
 Card data is entered only in the vault iframe. The Payments API accepts opaque tokens, claims work with `INSERT … ON CONFLICT` on `(merchant_id, idempotency_key)`, and commits the charge, ledger legs, and outbox row in **one** Postgres transaction. Risk rules run first; the fraud model can raise a verdict but never clears a hard block.
 

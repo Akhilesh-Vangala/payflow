@@ -13,8 +13,8 @@
 
 | Path | Use |
 | --- | --- |
-| [assets/branding/payflow-banner.svg](assets/branding/payflow-banner.svg) | README banner |
-| [assets/diagrams/payflow-architecture.svg](assets/diagrams/payflow-architecture.svg) | Architecture diagram |
+| [assets/branding/payflow-banner.png](assets/branding/payflow-banner.png) | README banner |
+| [assets/diagrams/payflow-architecture.png](assets/diagrams/payflow-architecture.png) | Architecture diagram |
 
 ## Live vs local
 
