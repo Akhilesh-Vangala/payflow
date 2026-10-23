@@ -50,7 +50,7 @@ payflow/
 │   ├── cmd/            payments-api, vault, bank-simulator, webhook-worker, scheduler
 │   ├── internal/       money, ledger, idempotency, payments, vault, risk, reconcile
 │   ├── migrations/     numbered SQL
-│   ├── ml/             fraud training and serving
+│   ├── ml/             model layer: fraud training and serving
 │   ├── examples/       merchant-server sample
 │   └── test/load/      k6 idempotency script
 ├── frontend/
