@@ -1,4 +1,6 @@
 # PayFlow — Idempotent Payment Gateway at Scale
+
+Earlier draft. The note the code comments point at is [payment-gateway-system-design_updated.md](payment-gateway-system-design_updated.md). The system as built is [ARCHITECTURE.md](ARCHITECTURE.md).
 ### System Design Document (target: ~10M users, high-throughput, PCI-adjacent)
 
 ---

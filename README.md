@@ -1,14 +1,12 @@
-<p align="center"><img src="docs/assets/branding/payflow-banner.png" alt="PayFlow banner" width="100%" /></p>
+# PayFlow
 
-**Exactly-once charges. Correct ledger.** [Open the dashboard](https://payflow-mu-amber.vercel.app/) · [Architecture](docs/ARCHITECTURE.md) · [Docs index](docs/README.md)
+A payment gateway where concurrent retries that share one idempotency key produce one bank authorization and one balanced ledger write.
+
+[Open the dashboard](https://payflow-mu-amber.vercel.app/) · [Architecture](docs/ARCHITECTURE.md) · [Transaction flow](docs/PAYMENT_TRANSACTION_FLOW.md) · [Fraud model card](backend/ml/MODEL_CARD.md)
 
 <p align="center">Go · Postgres · Redis · React · Docker Compose</p>
 
-# PayFlow
-
-A payment gateway built so concurrent retries with one idempotency key produce **one bank authorization and one balanced ledger write** — not “once-ish.”
-
-[**Open the dashboard ↗**](https://payflow-mu-amber.vercel.app/) · [Transaction flow](docs/PAYMENT_TRANSACTION_FLOW.md) · [System design](docs/payment-gateway-system-design_updated.md) · [Merchant integration example](backend/examples/merchant-server/README.md)
+The dashboard is the merchant UI. The bank is a deterministic simulator. This repository does not move real money.
 
 ```
 100 concurrent requests · 1 idempotency key → 1 bank authorization, 1 charge
@@ -26,19 +24,7 @@ A payment gateway built so concurrent retries with one idempotency key produce *
 
 ![PayFlow architecture](docs/assets/diagrams/payflow-architecture.png)
 
-Card data is entered only in the vault iframe. The Payments API accepts opaque tokens, claims work with `INSERT … ON CONFLICT` on `(merchant_id, idempotency_key)`, and commits the charge, ledger legs, and outbox row in **one** Postgres transaction. Risk rules run first; the fraud model can raise a verdict but never clears a hard block.
-
-```mermaid
-%%{init: {"theme": "neutral"}}%%
-flowchart LR
-  Checkout --> Vault[Vault tokenize]
-  Vault --> API[Payments API]
-  API --> Risk[Rules then model]
-  Risk --> Bank[Bank authorize]
-  Bank --> Ledger[Balanced ledger + outbox]
-  Ledger --> Hooks[Webhook delivery]
-  Hooks --> Recon[Reconcile ambiguous]
-```
+Card data is entered only in the vault iframe. The Payments API accepts opaque tokens, claims work with `INSERT … ON CONFLICT` on `(merchant_id, idempotency_key)`, and commits the charge, ledger legs, and outbox row in one Postgres transaction. Risk rules run first. The fraud model can raise a verdict and cannot clear a hard block.
 
 | Component | Responsibility |
 | --- | --- |
